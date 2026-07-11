@@ -1,0 +1,135 @@
+import { describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { buildApp } from "../src/app.js";
+import { loadConfig, type AppConfig } from "../src/config.js";
+import { RoomManager } from "../src/rooms.js";
+import { TokenService } from "../src/tokens.js";
+
+function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
+  const config = loadConfig({ LOG_LEVEL: "error" });
+  return { ...config, ...overrides };
+}
+
+async function makeApp(overrides: Partial<AppConfig> = {}): Promise<{
+  app: FastifyInstance;
+  roomManager: RoomManager;
+}> {
+  const config = testConfig(overrides);
+  const tokens = new TokenService(config.sessionSecret);
+  const roomManager = new RoomManager({ maxChannelSize: config.maxChannelSize });
+  const app = await buildApp({ config, tokens, roomManager });
+  return { app, roomManager };
+}
+
+const validBody = { channel: 3, code: 7, callsign: "Alpha" };
+
+describe("POST /api/join", () => {
+  it("issues a token for a valid request", async () => {
+    const { app } = await makeApp();
+    const res = await app.inject({ method: "POST", url: "/api/join", payload: validBody });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveProperty("token");
+  });
+
+  it("rejects out-of-range channel, code, and bad callsigns", async () => {
+    const { app } = await makeApp();
+    for (const payload of [
+      { ...validBody, channel: 23 },
+      { ...validBody, channel: 0 },
+      { ...validBody, code: 39 },
+      { ...validBody, callsign: "x" },
+      { ...validBody, callsign: "way too long callsign here" },
+      { ...validBody, callsign: "bad<script>" },
+      { channel: 3 },
+    ]) {
+      const res = await app.inject({ method: "POST", url: "/api/join", payload });
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
+  it("409s on a live callsign collision", async () => {
+    const { app, roomManager } = await makeApp();
+    roomManager.join("3:7", "Alpha", vi.fn(), vi.fn());
+    const res = await app.inject({ method: "POST", url: "/api/join", payload: validBody });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: "callsign-taken" });
+  });
+
+  it("423s when the channel is full", async () => {
+    const { app, roomManager } = await makeApp({ maxChannelSize: 2 });
+    roomManager.join("3:7", "One", vi.fn(), vi.fn());
+    roomManager.join("3:7", "Two", vi.fn(), vi.fn());
+    const res = await app.inject({ method: "POST", url: "/api/join", payload: validBody });
+    expect(res.statusCode).toBe(423);
+    expect(res.json()).toEqual({ error: "full" });
+  });
+
+  it("rate-limits after 10 requests in a minute from one IP", async () => {
+    const { app } = await makeApp();
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/join",
+        payload: { ...validBody, callsign: `Caller${i}` },
+      });
+      lastStatus = res.statusCode;
+    }
+    expect(lastStatus).toBe(429);
+  });
+});
+
+describe("GET /api/ice", () => {
+  it("returns STUN only by default", async () => {
+    const { app } = await makeApp();
+    const res = await app.inject({ method: "GET", url: "/api/ice" });
+    const body = res.json() as { iceServers: Array<{ urls: string[]; username?: string }> };
+    expect(body.iceServers).toHaveLength(1);
+    expect(body.iceServers[0]?.urls).toEqual(["stun:stun.l.google.com:19302"]);
+  });
+
+  it("includes TURN when configured", async () => {
+    const { app } = await makeApp({
+      turn: { url: "turn:turn.example.net:3478", username: "u", credential: "c" },
+    });
+    const res = await app.inject({ method: "GET", url: "/api/ice" });
+    const body = res.json() as { iceServers: unknown[] };
+    expect(body.iceServers).toHaveLength(2);
+  });
+});
+
+describe("GET /api/channels & /healthz", () => {
+  it("reports open-channel occupancy and health stats", async () => {
+    const { app, roomManager } = await makeApp();
+    roomManager.join("3:0", "Alpha", vi.fn(), vi.fn());
+    roomManager.join("9:5", "Bravo", vi.fn(), vi.fn());
+
+    const channels = await app.inject({ method: "GET", url: "/api/channels" });
+    expect(channels.json()).toEqual({ open: { "3": 1 } });
+
+    const health = await app.inject({ method: "GET", url: "/healthz" });
+    expect(health.json()).toEqual({ ok: true, rooms: 2, peers: 2 });
+  });
+});
+
+describe("config validation", () => {
+  it("rejects partial TURN configuration", () => {
+    expect(() => loadConfig({ TURN_URL: "turn:x" })).toThrow(/together/);
+  });
+
+  it("rejects a short SESSION_SECRET", () => {
+    expect(() => loadConfig({ SESSION_SECRET: "short" })).toThrow();
+  });
+
+  it("treats empty-string env values as unset (dotenv NAME= style)", () => {
+    const config = loadConfig({ SESSION_SECRET: "", TURN_URL: "", CLIENT_DIST: "" });
+    expect(config.sessionSecretGenerated).toBe(true);
+    expect(config.turn).toBeNull();
+    expect(config.clientDist).toBeNull();
+  });
+
+  it("does not trust proxy headers unless opted in", () => {
+    expect(loadConfig({}).trustProxy).toBe(false);
+    expect(loadConfig({ TRUST_PROXY: "true" }).trustProxy).toBe(true);
+  });
+});

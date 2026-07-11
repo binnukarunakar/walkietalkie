@@ -1,0 +1,32 @@
+{
+  "name": "walkietalkie",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser walkie-talkie: half-duplex group voice over a WebRTC P2P mesh with server-enforced floor control",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace server & npm run dev --workspace client & wait",
+    "build": "tsc --build shared server && npm run build --workspace client",
+    "start": "node server/dist/index.js",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "typecheck": "tsc --build shared server && npm run typecheck --workspace client",
+    "e2e": "npm run build && playwright test --config e2e/playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vitest": "^3.0.0"
+  }
+}

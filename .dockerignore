@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+dist
+.git
+.env
+.env.*
+test-results
+playwright-report
+e2e
+tools
+**/*.tsbuildinfo
+.DS_Store
