@@ -13,7 +13,7 @@ export function Roster(): JSX.Element {
 
   return (
     <ul className="roster" data-testid="roster">
-      <li data-speaking={floorHolder !== null && floorHolder === selfId}>
+      <li data-self="true" data-speaking={floorHolder !== null && floorHolder === selfId}>
         <span className="peer-name">
           {join.callsign} <em>(you)</em>
         </span>

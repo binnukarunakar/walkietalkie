@@ -66,7 +66,7 @@ export function RadioScreen(): JSX.Element {
     <div className="radio-screen" data-testid="radio-screen">
       <header>
         <div>
-          <strong data-testid="channel-label">
+          <strong className="freq" data-testid="channel-label">
             CH {join.channel} · {frequencyLabel(join.channel)}
           </strong>
           <span className="code-label">

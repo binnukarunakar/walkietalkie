@@ -244,6 +244,20 @@ describe("signaling end-to-end", () => {
     radio.ws.close();
   });
 
+  it("closes 4429 when a socket floods past the message budget", async () => {
+    const radio = await joinAndConnect("Lima", 13, 1);
+    await radio.nextOfType("welcome");
+    // Capacity is 200 with 50/s refill — 260 instant frames must trip it.
+    for (let i = 0; i < 260; i++) {
+      radio.send({ t: "ping" });
+    }
+    const { code } = await radio.closed;
+    expect(code).toBe(4429);
+    // The server itself is unaffected.
+    const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+    expect(res.ok).toBe(true);
+  });
+
   it("survives an oversized frame: that socket dies, the server does not", async () => {
     const radio = await joinAndConnect("Kilo", 12, 1);
     await radio.nextOfType("welcome");

@@ -71,9 +71,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   if (config.clientDist !== null && existsSync(config.clientDist)) {
+    // wildcard (default) resolves files from disk per request. `wildcard:
+    // false` would snapshot routes at boot — a rebuild under a running
+    // server would then serve index.html for the new hashed assets.
     await app.register(fastifyStatic, {
       root: config.clientDist,
-      wildcard: false,
     });
     // SPA fallback: any non-API GET serves the client shell.
     app.setNotFoundHandler((request, reply) => {

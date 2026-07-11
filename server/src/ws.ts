@@ -18,7 +18,44 @@ export const WS_CLOSE = {
   callsignTaken: 4409,
   channelFull: 4423,
   protocolError: 4400,
+  rateLimited: 4429,
 } as const;
+
+/**
+ * Per-socket message budget. Sized so a joiner renegotiating a full 9-peer
+ * mesh (offers/answers/ICE bursts) never comes close, while a flood gets the
+ * socket closed instead of the room's CPU.
+ */
+export const MSG_BUCKET_CAPACITY = 200;
+export const MSG_BUCKET_REFILL_PER_SEC = 50;
+
+export class TokenBucket {
+  private tokens: number;
+  private lastRefill: number;
+
+  constructor(
+    private readonly capacity: number,
+    private readonly refillPerSec: number,
+    private readonly now: () => number = Date.now,
+  ) {
+    this.tokens = capacity;
+    this.lastRefill = this.now();
+  }
+
+  take(): boolean {
+    const current = this.now();
+    const elapsedSec = (current - this.lastRefill) / 1000;
+    if (elapsedSec > 0) {
+      this.tokens = Math.min(this.capacity, this.tokens + elapsedSec * this.refillPerSec);
+      this.lastRefill = current;
+    }
+    if (this.tokens < 1) {
+      return false;
+    }
+    this.tokens -= 1;
+    return true;
+  }
+}
 
 interface LiveSocket extends WebSocket {
   isAlive?: boolean;
@@ -111,7 +148,12 @@ async function admit(ws: LiveSocket, req: IncomingMessage, deps: WsDeps): Promis
     ws.isAlive = true;
   });
 
+  const bucket = new TokenBucket(MSG_BUCKET_CAPACITY, MSG_BUCKET_REFILL_PER_SEC);
   ws.on("message", (raw) => {
+    if (!bucket.take()) {
+      ws.close(WS_CLOSE.rateLimited, "message rate exceeded");
+      return;
+    }
     const result = parseClientMessage(raw.toString());
     switch (result.kind) {
       case "ok":

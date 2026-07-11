@@ -1,7 +1,7 @@
 {
   "name": "walkietalkie",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "Browser walkie-talkie: half-duplex group voice over a WebRTC P2P mesh with server-enforced floor control",
   "license": "MIT",
   "type": "module",

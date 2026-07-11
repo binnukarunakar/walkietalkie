@@ -112,6 +112,34 @@ describe("GET /api/channels & /healthz", () => {
   });
 });
 
+describe("static client serving", () => {
+  it("serves files created after boot and falls back to index.html for SPA routes", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const dist = mkdtempSync(join(tmpdir(), "wt-dist-"));
+    writeFileSync(join(dist, "index.html"), "<!doctype html><div id=root></div>");
+    const { app } = await makeApp({ clientDist: dist });
+
+    // Simulate a rebuild under a running server: a new hashed asset appears.
+    mkdirSync(join(dist, "assets"));
+    writeFileSync(join(dist, "assets", "index-NEWHASH.js"), "export {};");
+
+    const asset = await app.inject({ method: "GET", url: "/assets/index-NEWHASH.js" });
+    expect(asset.statusCode).toBe(200);
+    expect(asset.headers["content-type"]).toContain("javascript");
+
+    const spa = await app.inject({ method: "GET", url: "/some/client/route" });
+    expect(spa.statusCode).toBe(200);
+    expect(spa.headers["content-type"]).toContain("text/html");
+
+    const api404 = await app.inject({ method: "GET", url: "/api/nope" });
+    expect(api404.statusCode).toBe(404);
+    expect(api404.json()).toEqual({ error: "not-found" });
+  });
+});
+
 describe("config validation", () => {
   it("rejects partial TURN configuration", () => {
     expect(() => loadConfig({ TURN_URL: "turn:x" })).toThrow(/together/);

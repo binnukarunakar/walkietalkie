@@ -15,6 +15,7 @@ protocol error: the socket closes with code 4400.
 | `4401` | token invalid, expired, or already used | request a fresh token via `/api/join` |
 | `4409` | callsign taken at admission | pick another callsign (during automatic reconnect: retry — a dead ghost session clears within ~60 s) |
 | `4423` | channel full at admission | pick another channel |
+| `4429` | message flood: per-socket budget exceeded (burst 200, refill 50/s) | reconnect with backoff; a well-behaved client never trips this |
 | `1001` | server shutting down | reconnect with backoff |
 
 `/api/join` checks (occupancy, callsign) are **advisory** — the world can
