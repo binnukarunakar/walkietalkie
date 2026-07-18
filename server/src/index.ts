@@ -2,6 +2,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { GroupRegistry, groupWsDeps } from "./groups.js";
 import { RoomManager } from "./rooms.js";
 import { TokenService } from "./tokens.js";
 import { attachWebSocket } from "./ws.js";
@@ -18,7 +19,8 @@ async function main(): Promise<void> {
     maxChannelSize: config.maxChannelSize,
     ...(config.maxHoldMs !== undefined ? { maxHoldMs: config.maxHoldMs } : {}),
   });
-  const app = await buildApp({ config, tokens, roomManager });
+  const groups = new GroupRegistry((roomKey) => roomManager.sizeOf(roomKey));
+  const app = await buildApp({ config, tokens, roomManager, groups });
 
   if (config.sessionSecretGenerated) {
     app.log.warn(
@@ -29,6 +31,7 @@ async function main(): Promise<void> {
   const wss = attachWebSocket(app.server, {
     tokens,
     roomManager,
+    ...groupWsDeps(groups, roomManager),
     log: {
       info: (msg) => app.log.info(msg),
       warn: (msg) => app.log.warn(msg),

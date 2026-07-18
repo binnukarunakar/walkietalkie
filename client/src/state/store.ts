@@ -8,6 +8,17 @@ export interface JoinParams {
   channel: number;
   code: number;
   callsign: string;
+  /** Set when joining a channel inside a group's namespace. */
+  groupId?: string;
+}
+
+/** Display context for a group session (member or announcer). */
+export interface GroupContext {
+  groupId: string;
+  groupName: string;
+  /** The joined channel's label; null for announce sessions (all channels). */
+  channelLabel: string | null;
+  announce: boolean;
 }
 
 export interface PeerAudioPrefs {
@@ -26,8 +37,9 @@ interface RadioState {
   transmitting: boolean;
   /** True between request-floor and grant/deny. */
   requesting: boolean;
-  lastDeny: { reason: FloorDenyReason; at: number } | null;
+  lastDeny: { reason: FloorDenyReason; at: number; busy?: string[] } | null;
   error: string | null;
+  groupContext: GroupContext | null;
   selfStatus: PeerStatus;
   deafened: boolean;
   peerAudio: Record<string, PeerAudioPrefs>;
@@ -54,6 +66,10 @@ interface RadioState {
   clearDeny: () => void;
   setRequesting: (requesting: boolean) => void;
   connectionLost: () => void;
+  setGroupContext: (ctx: GroupContext | null) => void;
+  announceGranted: () => void;
+  announceDenied: (busy: string[]) => void;
+  announceReleased: () => void;
   setSelfStatus: (status: PeerStatus) => void;
   setDeafened: (deafened: boolean) => void;
   setPeerAudio: (peerId: string, patch: Partial<PeerAudioPrefs>) => void;
@@ -72,6 +88,7 @@ const initial = {
   requesting: false,
   lastDeny: null,
   error: null,
+  groupContext: null as GroupContext | null,
   selfStatus: "available" as PeerStatus,
   deafened: false,
   peerAudio: {},
@@ -141,6 +158,17 @@ export const useRadioStore = create<RadioState>((set, get) => ({
 
   connectionLost: () =>
     set({ phase: "connecting", transmitting: false, requesting: false }),
+
+  setGroupContext: (groupContext) => set({ groupContext }),
+
+  // Announce sessions have no per-room seq; their floor state is the
+  // group-floor-* trio, applied without the stale-seq guard.
+  announceGranted: () => set({ transmitting: true, requesting: false }),
+
+  announceDenied: (busy) =>
+    set({ requesting: false, lastDeny: { reason: "busy", at: Date.now(), busy } }),
+
+  announceReleased: () => set({ transmitting: false, requesting: false }),
 
   setSelfStatus: (selfStatus) => set({ selfStatus }),
 

@@ -12,7 +12,11 @@ import { useRadioStore } from "../state/store";
 
 const OCCUPANCY_REFRESH_MS = 10_000;
 
-export function JoinScreen(): JSX.Element {
+interface JoinScreenProps {
+  onCreateGroup: () => void;
+}
+
+export function JoinScreen({ onCreateGroup }: JoinScreenProps): JSX.Element {
   const join = useRadioStore((s) => s.join);
   const setJoin = useRadioStore((s) => s.setJoin);
   const error = useRadioStore((s) => s.error);
@@ -140,6 +144,14 @@ export function JoinScreen(): JSX.Element {
       <p className="hint">
         Crews on the same channel with different privacy codes never hear each other.
       </p>
+      <button
+        type="button"
+        className="mini"
+        data-testid="create-group-link"
+        onClick={onCreateGroup}
+      >
+        Create a group of channels
+      </button>
     </form>
   );
 }

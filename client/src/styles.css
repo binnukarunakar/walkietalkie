@@ -539,3 +539,54 @@ input[type="checkbox"] {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── group lobby + create ───────────────────────────────────────────────── */
+
+.lobby-channels {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.lobby-channels li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.lobby-channel-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.group-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.group-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.group-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.announce-cta {
+  background: var(--accent);
+  color: var(--zinc-950);
+  border-color: var(--accent);
+  font-weight: 600;
+}

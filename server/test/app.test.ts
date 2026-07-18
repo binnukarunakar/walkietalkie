@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
+import { GroupRegistry } from "../src/groups.js";
 import { loadConfig, type AppConfig } from "../src/config.js";
 import { RoomManager } from "../src/rooms.js";
 import { TokenService } from "../src/tokens.js";
@@ -13,12 +14,14 @@ function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 async function makeApp(overrides: Partial<AppConfig> = {}): Promise<{
   app: FastifyInstance;
   roomManager: RoomManager;
+  groups: GroupRegistry;
 }> {
   const config = testConfig(overrides);
   const tokens = new TokenService(config.sessionSecret);
   const roomManager = new RoomManager({ maxChannelSize: config.maxChannelSize });
-  const app = await buildApp({ config, tokens, roomManager });
-  return { app, roomManager };
+  const groups = new GroupRegistry((key) => roomManager.sizeOf(key));
+  const app = await buildApp({ config, tokens, roomManager, groups });
+  return { app, roomManager, groups };
 }
 
 const validBody = { channel: 3, code: 7, callsign: "Alpha" };
@@ -109,6 +112,115 @@ describe("GET /api/channels & /healthz", () => {
 
     const health = await app.inject({ method: "GET", url: "/healthz" });
     expect(health.json()).toEqual({ ok: true, rooms: 2, peers: 2 });
+  });
+});
+
+describe("groups API", () => {
+  const stage = {
+    name: "Stage",
+    channels: [
+      { channel: 1, code: 0, label: "musicians" },
+      { channel: 2, code: 0, label: "led-tech" },
+    ],
+  };
+
+  async function createGroup(app: FastifyInstance) {
+    const res = await app.inject({ method: "POST", url: "/api/groups", payload: stage });
+    expect(res.statusCode).toBe(200);
+    return res.json() as { groupId: string; adminKey: string; name: string };
+  }
+
+  it("creates a group and serves its lobby info", async () => {
+    const { app } = await makeApp();
+    const created = await createGroup(app);
+    expect(created.name).toBe("Stage");
+
+    const info = await app.inject({ method: "GET", url: `/api/groups/${created.groupId}` });
+    expect(info.statusCode).toBe(200);
+    const body = info.json() as { channels: Array<{ label: string; occupancy: number }> };
+    expect(body.channels.map((c) => c.label)).toEqual(["musicians", "led-tech"]);
+  });
+
+  it("rejects invalid group definitions", async () => {
+    const { app } = await makeApp();
+    for (const payload of [
+      { ...stage, channels: [stage.channels[0]] }, // below min
+      { ...stage, channels: [stage.channels[0], stage.channels[0]] }, // duplicate pair
+      { ...stage, name: "x" },
+      { name: "Stage" },
+    ]) {
+      const res = await app.inject({ method: "POST", url: "/api/groups", payload });
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
+  it("404s lobby and join for unknown groups", async () => {
+    const { app } = await makeApp();
+    const info = await app.inject({ method: "GET", url: "/api/groups/nope1234" });
+    expect(info.statusCode).toBe(404);
+    const join = await app.inject({
+      method: "POST",
+      url: "/api/join",
+      payload: { channel: 1, code: 0, callsign: "Alpha", groupId: "nope1234" },
+    });
+    expect(join.statusCode).toBe(404);
+  });
+
+  it("rejects joining a channel the group does not contain", async () => {
+    const { app } = await makeApp();
+    const created = await createGroup(app);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/join",
+      payload: { channel: 9, code: 9, callsign: "Alpha", groupId: created.groupId },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "channel-not-in-group" });
+  });
+
+  it("issues member tokens for group channels", async () => {
+    const { app } = await makeApp();
+    const created = await createGroup(app);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/join",
+      payload: { channel: 1, code: 0, callsign: "Alpha", groupId: created.groupId },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveProperty("token");
+  });
+
+  it("guards announce with the admin key", async () => {
+    const { app } = await makeApp();
+    const created = await createGroup(app);
+    const bad = await app.inject({
+      method: "POST",
+      url: `/api/groups/${created.groupId}/announce`,
+      payload: { adminKey: "0".repeat(32), callsign: "Ops" },
+    });
+    expect(bad.statusCode).toBe(403);
+
+    const good = await app.inject({
+      method: "POST",
+      url: `/api/groups/${created.groupId}/announce`,
+      payload: { adminKey: created.adminKey, callsign: "Ops" },
+    });
+    expect(good.statusCode).toBe(200);
+    expect(good.json()).toHaveProperty("token");
+  });
+
+  it("refuses announce when the group exceeds the member cap", async () => {
+    const { app, roomManager } = await makeApp({ maxGroupMembers: 1 });
+    const created = await createGroup(app);
+    roomManager.join(`g/${created.groupId}/1:0`, "One", vi.fn(), vi.fn());
+    roomManager.join(`g/${created.groupId}/2:0`, "Two", vi.fn(), vi.fn());
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/groups/${created.groupId}/announce`,
+      payload: { adminKey: created.adminKey, callsign: "Ops" },
+    });
+    expect(res.statusCode).toBe(423);
+    expect(res.json()).toEqual({ error: "group-too-large" });
   });
 });
 

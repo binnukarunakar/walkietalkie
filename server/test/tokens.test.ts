@@ -15,27 +15,27 @@ describe("TokenService", () => {
 
   it("round-trips valid claims", async () => {
     const svc = new TokenService(secret);
-    const token = await svc.issue({ room: "3:7", callsign: "Alpha" });
-    expect(await svc.verifyAndConsume(token)).toEqual({ room: "3:7", callsign: "Alpha" });
+    const token = await svc.issue({ rooms: ["3:7"], callsign: "Alpha", mode: "member" as const });
+    expect(await svc.verifyAndConsume(token)).toEqual({ rooms: ["3:7"], callsign: "Alpha", mode: "member" as const });
   });
 
   it("rejects a token presented twice (single-use jti)", async () => {
     const svc = new TokenService(secret);
-    const token = await svc.issue({ room: "3:7", callsign: "Alpha" });
+    const token = await svc.issue({ rooms: ["3:7"], callsign: "Alpha", mode: "member" as const });
     await svc.verifyAndConsume(token);
     expect(await svc.verifyAndConsume(token)).toBeNull();
   });
 
   it("rejects an expired token", async () => {
     const svc = new TokenService(secret);
-    const token = await svc.issue({ room: "3:7", callsign: "Alpha" });
+    const token = await svc.issue({ rooms: ["3:7"], callsign: "Alpha", mode: "member" as const });
     vi.advanceTimersByTime(61_000);
     expect(await svc.verifyAndConsume(token)).toBeNull();
   });
 
   it("rejects a token signed with a different key", async () => {
     const other = new TokenService(randomBytes(32));
-    const token = await other.issue({ room: "3:7", callsign: "Alpha" });
+    const token = await other.issue({ rooms: ["3:7"], callsign: "Alpha", mode: "member" as const });
     const svc = new TokenService(secret);
     expect(await svc.verifyAndConsume(token)).toBeNull();
   });
@@ -47,7 +47,7 @@ describe("TokenService", () => {
 
   it("sweeps consumed jtis after their natural expiry", async () => {
     const svc = new TokenService(secret);
-    const token = await svc.issue({ room: "3:7", callsign: "Alpha" });
+    const token = await svc.issue({ rooms: ["3:7"], callsign: "Alpha", mode: "member" as const });
     await svc.verifyAndConsume(token);
     vi.advanceTimersByTime(120_000);
     // trigger a sweep with any verification attempt

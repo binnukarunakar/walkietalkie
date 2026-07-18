@@ -24,6 +24,11 @@ export interface RoomOptions {
  */
 export class Room {
   readonly floor: FloorControl;
+  /**
+   * Announce sessions arm this to learn about max-hold force-releases in
+   * any of their rooms (the room's own broadcast already went out).
+   */
+  onFloorForceRelease: ((holder: string) => void) | null = null;
   private readonly peers = new Map<string, PeerHandle>();
   private joinSeqCounter = 0;
 
@@ -32,8 +37,9 @@ export class Room {
     opts: RoomOptions = {},
   ) {
     const floorOpts: ConstructorParameters<typeof FloorControl>[0] = {
-      onForceRelease: (_holder, seq, reason) => {
+      onForceRelease: (holder, seq, reason) => {
         this.broadcast({ t: "floor-released", v: PROTOCOL_VERSION, seq, reason });
+        this.onFloorForceRelease?.(holder);
       },
     };
     if (opts.maxHoldMs !== undefined) floorOpts.maxHoldMs = opts.maxHoldMs;
@@ -54,14 +60,19 @@ export class Room {
     return this.peerList.some((p) => p.callsign.toLowerCase() === wanted);
   }
 
-  addPeer(callsign: string, send: PeerHandle["send"], close: PeerHandle["close"]): PeerHandle {
+  addPeer(
+    callsign: string,
+    send: PeerHandle["send"],
+    close: PeerHandle["close"],
+    fixed?: PeerIdentity,
+  ): PeerHandle {
     this.joinSeqCounter += 1;
     const handle: PeerHandle = {
       peer: {
-        peerId: randomUUID(),
+        peerId: fixed?.peerId ?? randomUUID(),
         callsign,
-        status: "available",
-        joinSeq: this.joinSeqCounter,
+        status: fixed?.status ?? "available",
+        joinSeq: fixed?.joinSeq ?? this.joinSeqCounter,
       },
       send,
       close,
@@ -128,6 +139,14 @@ export type JoinResult =
   | { ok: true; room: Room; handle: PeerHandle }
   | { ok: false; code: JoinRejection };
 
+/** Externally-fixed identity: announce peers keep one across all rooms; group
+ * members draw joinSeq from the group's shared counter. */
+export interface PeerIdentity {
+  peerId?: string;
+  joinSeq?: number;
+  status?: PeerStatus;
+}
+
 export interface RoomManagerOptions extends RoomOptions {
   maxChannelSize: number;
 }
@@ -158,6 +177,7 @@ export class RoomManager {
     callsign: string,
     send: PeerHandle["send"],
     close: PeerHandle["close"],
+    fixed?: PeerIdentity,
   ): JoinResult {
     const precheck = this.canJoin(roomKey, callsign);
     if (!precheck.ok) {
@@ -171,8 +191,16 @@ export class RoomManager {
       room = new Room(roomKey, roomOpts);
       this.rooms.set(roomKey, room);
     }
-    const handle = room.addPeer(callsign, send, close);
+    const handle = room.addPeer(callsign, send, close, fixed);
     return { ok: true, room, handle };
+  }
+
+  sizeOf(roomKey: string): number {
+    return this.rooms.get(roomKey)?.size ?? 0;
+  }
+
+  getRoom(roomKey: string): Room | undefined {
+    return this.rooms.get(roomKey);
   }
 
   leave(roomKey: string, peerId: string): void {

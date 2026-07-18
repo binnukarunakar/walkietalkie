@@ -95,6 +95,30 @@ a `MediaRecorder` ring buffer (last 10, in memory only) for instant replay.
 - **Floor races**: every floor transition carries a monotonic `seq`; clients
   discard stale transitions.
 
+## Groups (v1.2)
+
+A **group** is a named namespace of labelled channels — "Stage" containing
+CH1 *musicians* and CH2 *led-tech*. Rooms inside a group are keyed
+`g/<groupId>/<ch>:<code>`, fully isolated from the global FRS rooms. The
+registry is in-memory with TTL/idle GC: groups, like rooms, cease to exist
+when nobody needs them.
+
+Roles are **capabilities, not accounts**: creating a group returns an
+unguessable admin key; whoever holds the admin URL is a group admin, and
+sharing that URL appoints co-admins. Members get a plain group link and
+pick a channel in the lobby.
+
+**Announce (PA mode):** an admin can transmit to every channel at once. One
+WebSocket is admitted into all child rooms; the group floor is atomic (every
+channel free, or the announce is denied naming the busy crews); members
+simply see a normal transmitter key up in their channel. The announcer is
+transmit-only — receive gating across N rooms is deliberately sidestepped,
+like a real PA. Media stays pure P2P: the announcer meshes with every
+member, so announce is capped by `MAX_GROUP_MEMBERS` (default 24 ≈ 768 kbps
+upstream at 32 kbps Opus). Rooms in a group share one joinSeq counter so
+perfect-negotiation politeness remains a coherent total order across the
+announcer's merged mesh.
+
 ## What this deliberately is not
 
 - Not an SFU app — channel size is capped by design.
