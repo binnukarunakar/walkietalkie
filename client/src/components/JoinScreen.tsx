@@ -1,4 +1,6 @@
 import { useEffect, useState, type FormEvent, type JSX } from "react";
+import { motion } from "framer-motion";
+import { riseChild } from "../lib/motion";
 import {
   CHANNEL_MAX,
   CHANNEL_MIN,
@@ -77,14 +79,17 @@ export function JoinScreen({ onCreateGroup }: JoinScreenProps): JSX.Element {
 
   return (
     <form className="join-screen" onSubmit={onSubmit} data-testid="join-screen">
-      <h1>walkietalkie</h1>
-      <p className="tagline">
-        Half-duplex group voice. One transmitter at a time, like a real radio.
-      </p>
+      <motion.div variants={riseChild} className="brand">
+        <h1>walkietalkie</h1>
+        <p className="tagline">
+          Half-duplex group voice. One transmitter at a time, like a real radio.
+        </p>
+      </motion.div>
 
-      <label htmlFor="channel">
+      <motion.label variants={riseChild} htmlFor="channel">
         Channel
         <select
+          className="freq-select"
           id="channel"
           data-testid="channel-select"
           value={join.channel}
@@ -100,11 +105,12 @@ export function JoinScreen({ onCreateGroup }: JoinScreenProps): JSX.Element {
             );
           })}
         </select>
-      </label>
+      </motion.label>
 
-      <label htmlFor="code">
+      <motion.label variants={riseChild} htmlFor="code">
         Privacy code
         <select
+          className="freq-select"
           id="code"
           data-testid="code-select"
           value={join.code}
@@ -116,9 +122,9 @@ export function JoinScreen({ onCreateGroup }: JoinScreenProps): JSX.Element {
             </option>
           ))}
         </select>
-      </label>
+      </motion.label>
 
-      <label htmlFor="callsign">
+      <motion.label variants={riseChild} htmlFor="callsign">
         Callsign
         <input
           id="callsign"
@@ -130,7 +136,7 @@ export function JoinScreen({ onCreateGroup }: JoinScreenProps): JSX.Element {
           value={join.callsign}
           onChange={(e) => setJoin({ callsign: e.target.value })}
         />
-      </label>
+      </motion.label>
 
       {error !== null && (
         <p className="error" role="alert" data-testid="join-error">
@@ -138,20 +144,22 @@ export function JoinScreen({ onCreateGroup }: JoinScreenProps): JSX.Element {
         </p>
       )}
 
-      <button type="submit" data-testid="join-button" disabled={!callsignValid || submitting}>
-        {submitting ? "Tuning…" : "Tune in"}
-      </button>
-      <p className="hint">
-        Crews on the same channel with different privacy codes never hear each other.
-      </p>
-      <button
-        type="button"
-        className="mini"
-        data-testid="create-group-link"
-        onClick={onCreateGroup}
-      >
-        Create a group of channels
-      </button>
+      <motion.div variants={riseChild} className="join-actions">
+        <button type="submit" className="btn-primary" data-testid="join-button" disabled={!callsignValid || submitting}>
+          {submitting ? "Tuning…" : "Tune in"}
+        </button>
+        <p className="hint">
+          Crews on the same channel with different privacy codes never hear each other.
+        </p>
+        <button
+          type="button"
+          className="mini"
+          data-testid="create-group-link"
+          onClick={onCreateGroup}
+        >
+          Create a group of channels
+        </button>
+      </motion.div>
     </form>
   );
 }

@@ -43,6 +43,9 @@ export class AudioGraph {
   private floorHolder: string | null = null;
   private radioFilterOn = false;
   private deafened = false;
+  private receiveAnalyser: AnalyserNode | null = null;
+  private micAnalyser: AnalyserNode | null = null;
+  private micProbeTrack: MediaStreamTrack | null = null;
 
   /** Must be called from a user gesture (autoplay policy). */
   async resume(): Promise<void> {
@@ -59,10 +62,55 @@ export class AudioGraph {
       this.filterInput = this.ctx.createGain();
       this.voiceBus.connect(this.filterInput);
       this.buildVoicePath();
+
+      // Signal-meter tap on the incoming voice bus (pre-deafen gain would be
+      // ideal, but metering what you'd HEAR is the honest reading).
+      this.receiveAnalyser = this.ctx.createAnalyser();
+      this.receiveAnalyser.fftSize = 512;
+      this.receiveAnalyser.smoothingTimeConstant = 0.5;
+      this.voiceBus.connect(this.receiveAnalyser);
     }
     if (this.ctx.state === "suspended") {
       await this.ctx.resume();
     }
+  }
+
+  /**
+   * Meter the mic on a CLONED track — track.enabled=false silences every
+   * consumer (see transmit.ts), so the probe must own its enabled state.
+   */
+  attachMicProbe(mic: MediaStream): void {
+    if (this.ctx === null || this.micAnalyser !== null) {
+      return;
+    }
+    const original = mic.getAudioTracks()[0];
+    if (original === undefined) {
+      return;
+    }
+    this.micProbeTrack = original.clone();
+    this.micProbeTrack.enabled = true;
+    const source = this.ctx.createMediaStreamSource(new MediaStream([this.micProbeTrack]));
+    this.micAnalyser = this.ctx.createAnalyser();
+    this.micAnalyser.fftSize = 512;
+    this.micAnalyser.smoothingTimeConstant = 0.5;
+    source.connect(this.micAnalyser);
+  }
+
+  /** 0..1 level for the signal meter. `mic` = outgoing, else incoming. */
+  level(source: "mic" | "receive"): number {
+    const analyser = source === "mic" ? this.micAnalyser : this.receiveAnalyser;
+    if (analyser === null) {
+      return 0;
+    }
+    const data = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i += 1) {
+      const centered = ((data[i] ?? 128) - 128) / 128;
+      sum += centered * centered;
+    }
+    // RMS mapped through a gentle curve so speech occupies the visible range.
+    return Math.min(1, Math.sqrt(sum / data.length) * 4);
   }
 
   attachStream(peerId: string, stream: MediaStream): void {
@@ -154,6 +202,10 @@ export class AudioGraph {
     for (const peerId of [...this.peers.keys()]) {
       this.detachStream(peerId);
     }
+    this.micProbeTrack?.stop();
+    this.micProbeTrack = null;
+    this.micAnalyser = null;
+    this.receiveAnalyser = null;
     void this.ctx?.close().catch(() => undefined);
     this.ctx = null;
     this.master = null;

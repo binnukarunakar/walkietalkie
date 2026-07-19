@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { MotionConfig } from "framer-motion";
 import { App } from "./App";
 import "./styles.css";
 
@@ -10,6 +11,10 @@ if (rootElement === null) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    {/* reducedMotion="user": every Framer animation collapses to opacity-only
+        when the OS asks for reduced motion — one switch, whole app. */}
+    <MotionConfig reducedMotion="user">
+      <App />
+    </MotionConfig>
   </StrictMode>,
 );
