@@ -1,8 +1,10 @@
 import { useState, type JSX } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { CreateGroupScreen } from "./components/CreateGroupScreen";
 import { GroupLobby } from "./components/GroupLobby";
 import { JoinScreen } from "./components/JoinScreen";
 import { RadioScreen } from "./components/RadioScreen";
+import { rise } from "./lib/motion";
 import { useRadioStore } from "./state/store";
 
 interface GroupRoute {
@@ -27,30 +29,62 @@ export function App(): JSX.Element {
   const [groupRoute, setGroupRoute] = useState<GroupRoute | null>(groupRouteFromUrl);
   const [creating, setCreating] = useState(false);
 
-  if (phase === "join") {
-    if (groupRoute !== null) {
-      return <GroupLobby groupId={groupRoute.groupId} adminKey={groupRoute.adminKey} />;
+  const screen = (): { key: string; node: JSX.Element } => {
+    if (phase === "join") {
+      if (groupRoute !== null) {
+        return {
+          key: `lobby-${groupRoute.groupId}`,
+          node: <GroupLobby groupId={groupRoute.groupId} adminKey={groupRoute.adminKey} />,
+        };
+      }
+      if (creating) {
+        return {
+          key: "create",
+          node: (
+            <CreateGroupScreen
+              onCreated={(groupId, adminKey) => {
+                history.pushState(
+                  null,
+                  "",
+                  `/?group=${encodeURIComponent(groupId)}#admin=${adminKey}`,
+                );
+                setCreating(false);
+                setGroupRoute({ groupId, adminKey });
+              }}
+              onBack={() => setCreating(false)}
+            />
+          ),
+        };
+      }
+      return { key: "join", node: <JoinScreen onCreateGroup={() => setCreating(true)} /> };
     }
-    if (creating) {
-      return (
-        <CreateGroupScreen
-          onCreated={(groupId, adminKey) => {
-            history.pushState(null, "", `/?group=${encodeURIComponent(groupId)}#admin=${adminKey}`);
-            setCreating(false);
-            setGroupRoute({ groupId, adminKey });
-          }}
-          onBack={() => setCreating(false)}
-        />
-      );
+    if (phase === "connecting") {
+      return {
+        key: "connecting",
+        node: (
+          <div className="connecting" data-testid="connecting">
+            <span className="connecting-dot" aria-hidden="true" />
+            <p>Tuning…</p>
+          </div>
+        ),
+      };
     }
-    return <JoinScreen onCreateGroup={() => setCreating(true)} />;
-  }
-  if (phase === "connecting") {
-    return (
-      <div className="connecting" data-testid="connecting">
-        <p>Tuning…</p>
-      </div>
-    );
-  }
-  return <RadioScreen />;
+    return { key: "radio", node: <RadioScreen /> };
+  };
+
+  const { key, node } = screen();
+  return (
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={key}
+        className="screen"
+        variants={rise}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+      >
+        {node}
+      </motion.div>
+    </AnimatePresence>
+  );
 }

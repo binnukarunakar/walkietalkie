@@ -110,6 +110,7 @@ export class RadioClient {
       if (this.mic === null) {
         this.mic = await openMicrophone(micSettingsOf(settings));
         this.tx.attachMic(this.mic);
+        this.audio.attachMicProbe(this.mic);
       }
       if (this.abortIfDisposed()) return;
 
@@ -183,6 +184,11 @@ export class RadioClient {
     const element = new Audio(url);
     element.onended = () => URL.revokeObjectURL(url);
     void element.play().catch(() => URL.revokeObjectURL(url));
+  }
+
+  /** 0..1 audio level for the signal meter. */
+  meterLevel(source: "mic" | "receive"): number {
+    return this.audio.level(source);
   }
 
   /** Test/diagnostic hook: total inbound audio bytes across the mesh. */

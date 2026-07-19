@@ -1,4 +1,6 @@
 import { useEffect, useState, type JSX } from "react";
+import { motion } from "framer-motion";
+import { riseChild } from "../lib/motion";
 import { callsignSchema, frequencyLabel, type GroupInfo } from "@walkietalkie/shared";
 import { radio } from "../lib/radio";
 import { fetchGroupInfo } from "../lib/signaling";
@@ -95,6 +97,11 @@ export function GroupLobby({ groupId, adminKey }: GroupLobbyProps): JSX.Element 
       <p className="tagline">
         Group frequency plan — pick your channel{adminKey !== null ? ", or announce to all" : ""}.
       </p>
+      {adminKey !== null && (
+        <p className="role-line">
+          You're the admin — only this link can announce. Share the member link with your crew.
+        </p>
+      )}
 
       <label htmlFor="callsign">
         Callsign
@@ -112,7 +119,7 @@ export function GroupLobby({ groupId, adminKey }: GroupLobbyProps): JSX.Element 
 
       <ul className="lobby-channels">
         {info.channels.map((c) => (
-          <li key={`${String(c.channel)}:${String(c.code)}`}>
+          <motion.li variants={riseChild} key={`${String(c.channel)}:${String(c.code)}`}>
             <div className="lobby-channel-info">
               <span className="peer-name">{c.label}</span>
               <span className="tx-meta">
@@ -128,7 +135,7 @@ export function GroupLobby({ groupId, adminKey }: GroupLobbyProps): JSX.Element 
             >
               Join
             </button>
-          </li>
+          </motion.li>
         ))}
       </ul>
 
@@ -141,7 +148,7 @@ export function GroupLobby({ groupId, adminKey }: GroupLobbyProps): JSX.Element 
       {adminKey !== null && (
         <button
           type="button"
-          className="announce-cta"
+          className="btn-primary"
           data-testid="announce-button"
           disabled={!callsignValid || submitting}
           onClick={announce}

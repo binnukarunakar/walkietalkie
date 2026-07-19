@@ -1,12 +1,17 @@
 import { useEffect, useState, type JSX } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { frequencyLabel, type SettableStatus } from "@walkietalkie/shared";
 import { usePushToTalk } from "../hooks/usePushToTalk";
 import { useWakeLock } from "../hooks/useWakeLock";
+import { pressScale, riseChild, shake, transitions } from "../lib/motion";
 import { radio } from "../lib/radio";
+import { useSettings } from "../state/settings";
 import { useRadioStore } from "../state/store";
 import { Roster } from "./Roster";
 import { SettingsPanel } from "./SettingsPanel";
+import { SignalMeter } from "./SignalMeter";
 import { TransmissionLog } from "./TransmissionLog";
+import { Sheet } from "./ui/Sheet";
 
 const STATUS_CYCLE: SettableStatus[] = ["available", "busy", "monitoring"];
 const DENY_VISIBLE_MS = 1500;
@@ -23,6 +28,7 @@ export function RadioScreen(): JSX.Element {
   const lastDeny = useRadioStore((s) => s.lastDeny);
   const clearDeny = useRadioStore((s) => s.clearDeny);
   const groupContext = useRadioStore((s) => s.groupContext);
+  const pttKey = useSettings((s) => s.pttKey);
   const ptt = usePushToTalk();
   const [showSettings, setShowSettings] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -42,7 +48,7 @@ export function RadioScreen(): JSX.Element {
         ? "You"
         : (peers[floorHolder]?.callsign ?? "…");
 
-  const denyVisible = lastDeny !== null;
+  const announce = groupContext?.announce === true;
 
   const cycleStatus = (): void => {
     const next =
@@ -69,30 +75,32 @@ export function RadioScreen(): JSX.Element {
 
   return (
     <div className="radio-screen" data-testid="radio-screen">
-      <header>
+      <motion.header variants={riseChild}>
         <div>
           <strong className="freq" data-testid="channel-label">
-            {groupContext?.announce === true
+            {announce
               ? `${groupContext.groupName} · ALL CHANNELS`
               : `CH ${join.channel} · ${frequencyLabel(join.channel)}`}
           </strong>
           <span className="code-label">
             {groupContext !== null
-              ? `${groupContext.announce ? "PA" : (groupContext.channelLabel ?? groupContext.groupName)} · ${join.callsign}`
+              ? `${announce ? "Announce" : (groupContext.channelLabel ?? groupContext.groupName)} · ${join.callsign}`
               : `${join.code === 0 ? "open" : `code ${join.code}`} · ${join.callsign}`}
           </span>
         </div>
         <div className="header-actions">
-          {groupContext?.announce !== true && (
+          {!announce && (
             <>
               <button
                 type="button"
-                className="mini"
+                className="status-chip"
                 data-testid="status-button"
+                role="status"
                 onClick={cycleStatus}
-                title="Cycle status: available / busy / monitoring (listen-only)"
+                title="Tap to cycle: Available / Busy / Monitoring (listen-only)"
               >
-                {selfStatus}
+                <span className="status-dot" data-status={selfStatus} aria-hidden="true" />
+                {selfStatus.charAt(0).toUpperCase() + selfStatus.slice(1)}
               </button>
               <button
                 type="button"
@@ -113,7 +121,7 @@ export function RadioScreen(): JSX.Element {
             className="mini"
             data-testid="settings-button"
             aria-pressed={showSettings}
-            onClick={() => setShowSettings((v) => !v)}
+            onClick={() => setShowSettings(true)}
           >
             Settings
           </button>
@@ -121,38 +129,92 @@ export function RadioScreen(): JSX.Element {
             Leave
           </button>
         </div>
-      </header>
+      </motion.header>
 
-      <div className="floor-status" data-testid="floor-status" data-holder={holderName ?? ""}>
-        {transmitting ? (
-          <span className="on-air" data-testid="on-air">ON AIR</span>
-        ) : holderName !== null ? (
-          <span className="receiving" data-testid="receiving">{holderName} transmitting</span>
-        ) : (
-          <span className="idle">Channel clear</span>
-        )}
-      </div>
+      <motion.div
+        variants={riseChild}
+        className="floor-status"
+        data-testid="floor-status"
+        data-holder={holderName ?? ""}
+        data-announce={announce && transmitting}
+      >
+        <AnimatePresence mode="wait" initial={false}>
+          {transmitting ? (
+            <motion.span
+              key="tx"
+              className="on-air"
+              data-testid="on-air"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={transitions.fast}
+            >
+              {announce ? "ON AIR · ALL CHANNELS" : "ON AIR"}
+            </motion.span>
+          ) : holderName !== null ? (
+            <motion.span
+              key={`rx-${holderName}`}
+              className="receiving"
+              data-testid="receiving"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={transitions.fast}
+            >
+              RECEIVING · {holderName}
+            </motion.span>
+          ) : (
+            <motion.span
+              key="idle"
+              className="idle"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={transitions.fast}
+            >
+              Channel clear
+            </motion.span>
+          )}
+        </AnimatePresence>
+        <SignalMeter />
+      </motion.div>
 
-      {showSettings && <SettingsPanel />}
+      <Sheet open={showSettings} onOpenChange={setShowSettings} title="Settings">
+        <SettingsPanel />
+      </Sheet>
 
       <Roster />
-      {groupContext?.announce !== true && <TransmissionLog />}
+      {!announce && <TransmissionLog />}
 
-      {denyVisible && (
-        <p className="deny" role="status" data-testid="floor-denied">
-          {lastDeny?.busy !== undefined && lastDeny.busy.length > 0
-            ? `Busy: ${lastDeny.busy.join(", ")}`
-            : `Channel busy${lastDeny?.reason === "cooldown" ? " — cooldown" : ""}`}
-        </p>
-      )}
+      <AnimatePresence>
+        {lastDeny !== null && (
+          <motion.p
+            className="deny"
+            role="status"
+            data-testid="floor-denied"
+            variants={shake}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+          >
+            {lastDeny.busy !== undefined && lastDeny.busy.length > 0
+              ? `Busy: ${lastDeny.busy.join(", ")}`
+              : `Channel busy${lastDeny.reason === "cooldown" ? " — cooldown" : ""}`}
+          </motion.p>
+        )}
+      </AnimatePresence>
 
-      <button
+      <motion.button
         type="button"
         className="ptt-button"
         data-testid="ptt-button"
         data-transmitting={transmitting}
         data-requesting={requesting}
+        data-busy={holderName !== null && !transmitting}
+        data-announce={announce && transmitting}
         disabled={selfStatus === "monitoring"}
+        whileTap={pressScale}
+        transition={transitions.spring}
         onPointerDown={ptt.onPointerDown}
         onPointerUp={ptt.onPointerUp}
         onPointerCancel={ptt.onPointerCancel}
@@ -161,16 +223,24 @@ export function RadioScreen(): JSX.Element {
         {selfStatus === "monitoring"
           ? "MONITORING"
           : transmitting
-            ? groupContext?.announce === true
+            ? announce
               ? "ANNOUNCING"
               : "TRANSMITTING"
             : requesting
               ? "…"
-              : groupContext?.announce === true
-                ? "HOLD TO ANNOUNCE"
-                : "HOLD TO TALK"}
-      </button>
-      <p className="hint">Hold the button or the PTT key.</p>
+              : holderName !== null
+                ? "CHANNEL BUSY"
+                : announce
+                  ? "HOLD TO ANNOUNCE"
+                  : "HOLD TO TALK"}
+      </motion.button>
+      <p className="hint">
+        {transmitting
+          ? "Release to stop."
+          : holderName !== null
+            ? "Channel busy — wait for the transmission to end."
+            : `Hold the button — or hold ${pttKey}.`}
+      </p>
     </div>
   );
 }
