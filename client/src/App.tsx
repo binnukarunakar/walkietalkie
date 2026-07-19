@@ -16,7 +16,10 @@ function groupRouteFromUrl(): GroupRoute | null {
   if (groupId === null || groupId.length < 6) {
     return null;
   }
-  return { groupId, adminKey: params.get("admin") };
+  // The admin key rides in the fragment, which browsers never send to the
+  // server — a query param would land in server request logs.
+  const hash = new URLSearchParams(location.hash.slice(1));
+  return { groupId, adminKey: hash.get("admin") };
 }
 
 export function App(): JSX.Element {
@@ -32,7 +35,7 @@ export function App(): JSX.Element {
       return (
         <CreateGroupScreen
           onCreated={(groupId, adminKey) => {
-            history.pushState(null, "", `/?group=${encodeURIComponent(groupId)}&admin=${adminKey}`);
+            history.pushState(null, "", `/?group=${encodeURIComponent(groupId)}#admin=${adminKey}`);
             setCreating(false);
             setGroupRoute({ groupId, adminKey });
           }}

@@ -86,13 +86,22 @@ export class GroupRegistry {
       return undefined;
     }
     // TTL is enforced at read, not just at sweep time — otherwise a stale
-    // entry keeps minting tokens between sweeps.
+    // entry keeps minting tokens between sweeps. Reads do NOT refresh
+    // lastActiveAt: an abandoned lobby tab polling GET /api/groups/:id must
+    // not keep an empty group alive forever.
     if (this.now() - group.createdAt > this.ttlMs) {
       this.groups.delete(groupId);
       return undefined;
     }
-    group.lastActiveAt = this.now();
     return group;
+  }
+
+  /** Real activity (join tokens, announce) — resets the idle clock. */
+  touch(groupId: string): void {
+    const group = this.groups.get(groupId);
+    if (group !== undefined) {
+      group.lastActiveAt = this.now();
+    }
   }
 
   verifyAdmin(groupId: string, adminKey: string): boolean {

@@ -36,8 +36,8 @@ test("groups: create via UI, two crews, admin announces to all channels", async 
   await expect(admin.getByTestId("group-lobby")).toBeVisible({ timeout: 10_000 });
   const adminUrl = admin.url();
   expect(adminUrl).toContain("group=");
-  expect(adminUrl).toContain("admin=");
-  const memberUrl = adminUrl.replace(/&admin=[^&]+/, "");
+  expect(adminUrl).toContain("#admin=");
+  const memberUrl = adminUrl.replace(/#admin=.*$/, "");
 
   // ── Two crew members join DIFFERENT channels via the member link.
   const ctxA = await browser.newContext();

@@ -85,10 +85,33 @@ describe("GroupRegistry", () => {
     const created = registry.create("Stage", CHANNELS);
     if (created === null) throw new Error("create failed");
     nowRef.t = 900;
-    expect(registry.get(created.group.groupId)).toBeDefined(); // touch
+    registry.touch(created.group.groupId);
     nowRef.t = 1100;
     registry.create("Trigger", CHANNELS);
     expect(registry.get(created.group.groupId)).toBeUndefined();
+    registry.dispose();
+  });
+
+  it("reads do not reset the idle clock — an abandoned lobby cannot immortalize a group", () => {
+    const { registry, nowRef } = makeRegistry(); // idleMs=100
+    const created = registry.create("Stage", CHANNELS);
+    if (created === null) throw new Error("create failed");
+    // Poll like a lobby tab: reads at t=50 and t=99 must not count as activity.
+    nowRef.t = 50;
+    expect(registry.get(created.group.groupId)).toBeDefined();
+    nowRef.t = 99;
+    expect(registry.get(created.group.groupId)).toBeDefined();
+    nowRef.t = 150; // idle since creation > idleMs, occupancy 0
+    registry.create("Trigger", CHANNELS); // create() sweeps
+    expect(registry.get(created.group.groupId)).toBeUndefined();
+    // touch() (a join token) DOES reset the clock
+    const kept = registry.create("Kept", CHANNELS);
+    if (kept === null) throw new Error("create failed");
+    nowRef.t = 220;
+    registry.touch(kept.group.groupId);
+    nowRef.t = 300; // 80ms since touch < idleMs
+    registry.create("Trigger2", CHANNELS);
+    expect(registry.get(kept.group.groupId)).toBeDefined();
     registry.dispose();
   });
 

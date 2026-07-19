@@ -61,6 +61,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         if (!member) {
           return reply.code(400).send({ error: "channel-not-in-group" });
         }
+        groups.touch(groupId);
         key = groupRoomKey(groupId, channel, code);
       } else {
         key = roomKey(channel, code);
@@ -132,6 +133,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       if (groups.totalOccupancy(group) > config.maxGroupMembers) {
         return reply.code(423).send({ error: "group-too-large" });
       }
+      groups.touch(groupId);
       const keys = groups.roomKeys(group);
       for (const key of keys) {
         const check = roomManager.canJoin(key, parsed.data.callsign);
