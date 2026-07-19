@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION, type PeerStatus, type ServerMessage } from "@walkietalkie/shared";
+import { PROTOCOL_VERSION, type ServerMessage, type SettableStatus } from "@walkietalkie/shared";
 import { useSettings, type SettingsState } from "../state/settings";
 import { useRadioStore, type JoinParams } from "../state/store";
 import { AudioGraph, applyMicSettings, openMicrophone, type MicSettings } from "./audio";
@@ -6,7 +6,8 @@ import { closeCodeMessage, joinErrorMessage } from "./errors";
 import { Mesh } from "./mesh";
 import { backoffDelayMs, isFatalCloseCode, isRetryableJoinError } from "./reconnect";
 import { TransmissionRecorder, type ReplayEntry } from "./replay";
-import { JoinError, Signaling, fetchIceServers, requestJoinToken } from "./signaling";
+import { acquireToken, contextOf, type SessionParams } from "./session";
+import { JoinError, Signaling, fetchIceServers } from "./signaling";
 import { TransmitController } from "./transmit";
 
 /** A suspended AudioContext must not block reconnection (see join()). */
@@ -23,8 +24,16 @@ export class RadioClient {
   private mic: MediaStream | null = null;
   private readonly audio = new AudioGraph();
   private readonly tx = new TransmitController({
-    sendRequestFloor: () => this.signaling?.send({ t: "request-floor", v: PROTOCOL_VERSION }),
-    sendReleaseFloor: () => this.signaling?.send({ t: "release-floor", v: PROTOCOL_VERSION }),
+    sendRequestFloor: () =>
+      this.signaling?.send({
+        t: this.isAnnounce ? "request-group-floor" : "request-floor",
+        v: PROTOCOL_VERSION,
+      }),
+    sendReleaseFloor: () =>
+      this.signaling?.send({
+        t: this.isAnnounce ? "release-group-floor" : "release-floor",
+        v: PROTOCOL_VERSION,
+      }),
     audio: this.audio,
   });
   private readonly recorder = new TransmissionRecorder();
@@ -32,7 +41,7 @@ export class RadioClient {
   private reconnectAttempt = 0;
   private reconnectTimer: number | null = null;
   private disposed = false;
-  private params: JoinParams | null = null;
+  private session: SessionParams | null = null;
 
   constructor() {
     // The UI writes preferences to the persisted settings store; the live
@@ -58,9 +67,27 @@ export class RadioClient {
     });
   }
 
-  async join(params: JoinParams): Promise<void> {
+  async join(params: JoinParams & { groupName?: string; channelLabel?: string }): Promise<void> {
+    return this.start({ kind: "member", ...params });
+  }
+
+  async announce(params: {
+    groupId: string;
+    adminKey: string;
+    callsign: string;
+    groupName: string;
+  }): Promise<void> {
+    return this.start({ kind: "announce", ...params });
+  }
+
+  private get isAnnounce(): boolean {
+    return this.session?.kind === "announce";
+  }
+
+  private async start(session: SessionParams): Promise<void> {
     const store = useRadioStore.getState();
-    this.params = params;
+    this.session = session;
+    store.setGroupContext(contextOf(session));
     this.disposed = false; // singleton: joining again after leave() re-arms it
     store.setPhase("connecting");
     store.setError(null);
@@ -75,14 +102,18 @@ export class RadioClient {
       ]);
       const settings = useSettings.getState();
       this.audio.setRadioFilter(settings.radioVoice);
-      this.audio.setDeafened(store.deafened);
+      // PA sessions are transmit-only by design: force-deafen the graph.
+      if (session.kind === "announce") {
+        store.setDeafened(true);
+      }
+      this.audio.setDeafened(session.kind === "announce" ? true : store.deafened);
       if (this.mic === null) {
         this.mic = await openMicrophone(micSettingsOf(settings));
         this.tx.attachMic(this.mic);
       }
       if (this.abortIfDisposed()) return;
 
-      const token = await requestJoinToken(params.channel, params.code, params.callsign);
+      const token = await acquireToken(session);
       if (this.abortIfDisposed()) return;
       const iceServers = await fetchIceServers();
       if (this.abortIfDisposed()) return;
@@ -127,7 +158,7 @@ export class RadioClient {
     useRadioStore.getState().reset();
   }
 
-  setStatus(status: PeerStatus): void {
+  setStatus(status: SettableStatus): void {
     useRadioStore.getState().setSelfStatus(status);
     this.signaling?.send({ t: "set-status", v: PROTOCOL_VERSION, status });
   }
@@ -233,6 +264,25 @@ export class RadioClient {
           // Negotiation glare the polite/impolite pattern already absorbs.
         });
         break;
+      case "group-floor-granted": {
+        if (this.tx.held) {
+          store.announceGranted();
+          this.tx.handleGrantedSelf();
+        } else {
+          // Granted after the key was already released: give it back.
+          store.setRequesting(false);
+          this.signaling?.send({ t: "release-group-floor", v: PROTOCOL_VERSION });
+        }
+        break;
+      }
+      case "group-floor-denied":
+        store.announceDenied(msg.busy);
+        this.tx.handleDenied();
+        break;
+      case "group-floor-released":
+        store.announceReleased();
+        this.tx.handleReleased(msg.reason, true);
+        break;
       case "pong":
       case "error":
         break;
@@ -270,7 +320,7 @@ export class RadioClient {
       this.mesh.addPeer(peer.peerId, peer.joinSeq);
     }
     this.audio.setFloorHolder(msg.floor.holder);
-    if (store.selfStatus !== "available") {
+    if (store.selfStatus !== "available" && store.selfStatus !== "announcing") {
       this.signaling?.send({ t: "set-status", v: PROTOCOL_VERSION, status: store.selfStatus });
     }
   }
@@ -298,8 +348,8 @@ export class RadioClient {
     this.reconnectAttempt += 1;
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
-      if (this.params !== null && !this.disposed) {
-        void this.join(this.params).catch(() => {
+      if (this.session !== null && !this.disposed) {
+        void this.start(this.session).catch(() => {
           // handleJoinFailure / handleDrop schedule the next attempt.
         });
       }

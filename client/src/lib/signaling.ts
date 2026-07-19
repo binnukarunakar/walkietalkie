@@ -2,6 +2,7 @@ import {
   PROTOCOL_VERSION,
   serverMessageSchema,
   type ClientMessage,
+  type GroupInfo,
   type ServerMessage,
 } from "@walkietalkie/shared";
 import { CLOSE_LIVENESS_TIMEOUT } from "./reconnect";
@@ -126,11 +127,32 @@ export async function requestJoinToken(
   channel: number,
   code: number,
   callsign: string,
+  groupId?: string,
 ): Promise<string> {
-  const res = await fetch("/api/join", {
+  return postForToken("/api/join", {
+    channel,
+    code,
+    callsign,
+    ...(groupId !== undefined ? { groupId } : {}),
+  });
+}
+
+export async function requestAnnounceToken(
+  groupId: string,
+  adminKey: string,
+  callsign: string,
+): Promise<string> {
+  return postForToken(`/api/groups/${encodeURIComponent(groupId)}/announce`, {
+    adminKey,
+    callsign,
+  });
+}
+
+async function postForToken(url: string, payload: Record<string, unknown>): Promise<string> {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ channel, code, callsign }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({ error: "unknown" }))) as { error?: string };
@@ -138,6 +160,18 @@ export async function requestJoinToken(
   }
   const body = (await res.json()) as { token: string };
   return body.token;
+}
+
+export async function fetchGroupInfo(groupId: string): Promise<GroupInfo | null> {
+  try {
+    const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}`);
+    if (!res.ok) {
+      return null;
+    }
+    return (await res.json()) as GroupInfo;
+  } catch {
+    return null;
+  }
 }
 
 const DEFAULT_ICE: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];

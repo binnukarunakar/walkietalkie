@@ -4,6 +4,7 @@ import WebSocket from "ws";
 import type { FastifyInstance } from "fastify";
 import { serverMessageSchema, type ServerMessage } from "@walkietalkie/shared";
 import { buildApp } from "../src/app.js";
+import { GroupRegistry, groupWsDeps } from "../src/groups.js";
 import { loadConfig } from "../src/config.js";
 import { RoomManager } from "../src/rooms.js";
 import { TokenService } from "../src/tokens.js";
@@ -88,10 +89,12 @@ beforeAll(async () => {
     maxChannelSize: config.maxChannelSize,
     cooldownMs: 0,
   });
-  app = await buildApp({ config, tokens, roomManager });
+  const groups = new GroupRegistry((key) => roomManager.sizeOf(key));
+  app = await buildApp({ config, tokens, roomManager, groups });
   attachWebSocket(app.server, {
     tokens,
     roomManager,
+    ...groupWsDeps(groups, roomManager),
     log: { info: () => undefined, warn: () => undefined },
   });
   await app.listen({ port: 0, host: "127.0.0.1" });
@@ -100,6 +103,179 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
+});
+
+describe("group announce end-to-end", () => {
+  const stage = {
+    name: "Stage",
+    channels: [
+      { channel: 1, code: 5, label: "musicians" },
+      { channel: 2, code: 5, label: "led-tech" },
+    ],
+  };
+
+  async function createGroup(): Promise<{ groupId: string; adminKey: string }> {
+    const res = await fetch(`http://127.0.0.1:${port}/api/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(stage),
+    });
+    if (!res.ok) throw new Error(`group create failed: ${res.status}`);
+    return (await res.json()) as { groupId: string; adminKey: string };
+  }
+
+  async function joinGroupChannel(
+    groupId: string,
+    channel: number,
+    callsign: string,
+  ): Promise<Radio> {
+    const res = await fetch(`http://127.0.0.1:${port}/api/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ channel, code: 5, callsign, groupId }),
+    });
+    if (!res.ok) throw new Error(`group join failed: ${res.status}`);
+    const { token } = (await res.json()) as { token: string };
+    return connect(token);
+  }
+
+  async function connectAnnouncer(
+    groupId: string,
+    adminKey: string,
+    callsign: string,
+  ): Promise<Radio> {
+    const res = await fetch(`http://127.0.0.1:${port}/api/groups/${groupId}/announce`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ adminKey, callsign }),
+    });
+    if (!res.ok) throw new Error(`announce token failed: ${res.status}`);
+    const { token } = (await res.json()) as { token: string };
+    return connect(token);
+  }
+
+  it("runs the full announce flow across two isolated channels", async () => {
+    const { groupId, adminKey } = await createGroup();
+
+    // Two members on DIFFERENT channels of the group.
+    const musician = await joinGroupChannel(groupId, 1, "Guitar");
+    const tech = await joinGroupChannel(groupId, 2, "Lights");
+    const wM = await musician.nextOfType("welcome");
+    const wT = await tech.nextOfType("welcome");
+    // Channel isolation inside the group: they don't see each other.
+    expect(wM.peers).toHaveLength(0);
+    expect(wT.peers).toHaveLength(0);
+
+    // Group rooms are isolated from the global FRS room of the same number.
+    const globalPeer = await joinAndConnect("Outsider", 1, 5);
+    const wG = await globalPeer.nextOfType("welcome");
+    expect(wG.peers).toHaveLength(0);
+
+    // Announcer joins everything at once.
+    const ops = await connectAnnouncer(groupId, adminKey, "Ops");
+    const wOps = await ops.nextOfType("welcome");
+    expect(wOps.self.status).toBe("announcing");
+    expect(wOps.peers.map((p) => p.callsign).sort()).toEqual(["Guitar", "Lights"]);
+    // Both members see the announcer arrive in their own room.
+    expect((await musician.nextOfType("peer-joined")).peer.callsign).toBe("Ops");
+    expect((await tech.nextOfType("peer-joined")).peer.callsign).toBe("Ops");
+    // Cross-room politeness: group-wide joinSeq is a total order.
+    expect(wOps.self.joinSeq).toBeGreaterThan(wM.self.joinSeq);
+
+    // Atomic group floor: both channels grant to the announcer.
+    ops.send({ t: "request-group-floor" });
+    await ops.nextOfType("group-floor-granted");
+    expect((await musician.nextOfType("floor-granted")).holder).toBe(wOps.self.peerId);
+    expect((await tech.nextOfType("floor-granted")).holder).toBe(wOps.self.peerId);
+
+    // Members cannot key over the announcement.
+    musician.send({ t: "request-floor" });
+    expect((await musician.nextOfType("floor-denied")).reason).toBe("busy");
+
+    // Signal relay reaches a member in whichever room they sit.
+    ops.send({ t: "signal", to: wM.self.peerId, data: { sdp: "announce-offer" } });
+    const relayed = await musician.nextOfType("signal");
+    expect(relayed.from).toBe(wOps.self.peerId);
+
+    // Release frees every channel.
+    ops.send({ t: "release-group-floor" });
+    await ops.nextOfType("group-floor-released");
+    expect((await musician.nextOfType("floor-released")).reason).toBe("released");
+    expect((await tech.nextOfType("floor-released")).reason).toBe("released");
+
+    // A member can talk again afterwards.
+    musician.send({ t: "request-floor" });
+    await musician.nextOfType("floor-granted");
+    musician.send({ t: "release-floor" });
+
+    musician.ws.close();
+    tech.ws.close();
+    globalPeer.ws.close();
+    ops.ws.close();
+  });
+
+  it("denies the group floor atomically while any channel is busy", async () => {
+    const { groupId, adminKey } = await createGroup();
+    const talker = await joinGroupChannel(groupId, 1, "Talker");
+    const listener = await joinGroupChannel(groupId, 2, "Listener");
+    await talker.nextOfType("welcome");
+    await listener.nextOfType("welcome");
+
+    talker.send({ t: "request-floor" });
+    await talker.nextOfType("floor-granted");
+
+    const ops = await connectAnnouncer(groupId, adminKey, "Boss");
+    await ops.nextOfType("welcome");
+    await talker.nextOfType("peer-joined");
+    await listener.nextOfType("peer-joined");
+
+    ops.send({ t: "request-group-floor" });
+    const denied = await ops.nextOfType("group-floor-denied");
+    expect(denied.busy).toEqual(["musicians"]);
+    // The untouched channel saw a rollback, never a lasting grant: the
+    // listener's next floor event must be a release (from the rollback) or
+    // nothing held — proven by the listener acquiring the floor right now.
+    listener.send({ t: "request-floor" });
+    await listener.nextOfType("floor-granted");
+
+    // Members' floor events are suppressed for the announcer, who still
+    // gets pong (session alive).
+    ops.send({ t: "ping" });
+    await ops.nextOfType("pong");
+
+    // Member-mode messages on an announce socket earn an error frame.
+    ops.send({ t: "request-floor" });
+    expect((await ops.nextOfType("error")).code).toBe("announce-session");
+    // And vice versa.
+    talker.send({ t: "request-group-floor" });
+    expect((await talker.nextOfType("error")).code).toBe("not-announce-session");
+
+    talker.ws.close();
+    listener.ws.close();
+    ops.ws.close();
+  });
+
+  it("releases every channel when the announcer disconnects mid-announcement", async () => {
+    const { groupId, adminKey } = await createGroup();
+    const member = await joinGroupChannel(groupId, 1, "Solo");
+    await member.nextOfType("welcome");
+
+    const ops = await connectAnnouncer(groupId, adminKey, "Ghost");
+    await ops.nextOfType("welcome");
+    await member.nextOfType("peer-joined");
+
+    ops.send({ t: "request-group-floor" });
+    await ops.nextOfType("group-floor-granted");
+    await member.nextOfType("floor-granted");
+
+    ops.ws.close();
+    expect((await member.nextOfType("floor-released")).reason).toBe("disconnected");
+    await member.nextOfType("peer-left");
+
+    member.send({ t: "request-floor" });
+    await member.nextOfType("floor-granted");
+    member.ws.close();
+  });
 });
 
 describe("signaling end-to-end", () => {
@@ -228,6 +404,14 @@ describe("signaling end-to-end", () => {
     const radio = await joinAndConnect("India", 10, 1);
     await radio.nextOfType("welcome");
     radio.send({ t: "signal", to: "" }); // known type, fails schema
+    const { code } = await radio.closed;
+    expect(code).toBe(4400);
+  });
+
+  it("closes 4400 when a member claims the reserved announcing status", async () => {
+    const radio = await joinAndConnect("Faker", 15, 1);
+    await radio.nextOfType("welcome");
+    radio.send({ t: "set-status", status: "announcing" }); // known type, invalid payload
     const { code } = await radio.closed;
     expect(code).toBe(4400);
   });

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { DEFAULT_MAX_CHANNEL_SIZE } from "@walkietalkie/shared";
+import { DEFAULT_MAX_CHANNEL_SIZE, DEFAULT_MAX_GROUP_MEMBERS } from "@walkietalkie/shared";
 
 /** `.env` files often ship `NAME=` — treat empty strings as unset. */
 const emptyToUndefined = (v: unknown): unknown => (v === "" ? undefined : v);
@@ -10,6 +10,8 @@ const envSchema = z.object({
   HOST: z.string().default("0.0.0.0"),
   SESSION_SECRET: z.preprocess(emptyToUndefined, z.string().min(32).optional()),
   MAX_CHANNEL_SIZE: z.coerce.number().int().min(2).max(16).default(DEFAULT_MAX_CHANNEL_SIZE),
+  /** Announce meshes with every group member — cap total upstream cost. */
+  MAX_GROUP_MEMBERS: z.coerce.number().int().min(2).max(60).default(DEFAULT_MAX_GROUP_MEMBERS),
   /** Floor max-hold override (ms). Mainly for tests; production uses the protocol default. */
   MAX_HOLD_MS: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1000).optional()),
   STUN_URLS: z.string().default("stun:stun.l.google.com:19302"),
@@ -30,6 +32,7 @@ export interface AppConfig {
   sessionSecret: Uint8Array;
   sessionSecretGenerated: boolean;
   maxChannelSize: number;
+  maxGroupMembers: number;
   maxHoldMs: number | undefined;
   stunUrls: string[];
   turn: { url: string; username: string; credential: string } | null;
@@ -61,6 +64,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionSecret: secret,
     sessionSecretGenerated: generated,
     maxChannelSize: parsed.MAX_CHANNEL_SIZE,
+    maxGroupMembers: parsed.MAX_GROUP_MEMBERS,
     maxHoldMs: parsed.MAX_HOLD_MS,
     stunUrls: parsed.STUN_URLS.split(",")
       .map((s) => s.trim())

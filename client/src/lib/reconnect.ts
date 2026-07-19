@@ -4,11 +4,13 @@ export const RECONNECT_BASE_MS = 1_000;
 export const RECONNECT_MAX_MS = 30_000;
 
 /**
- * A dead session can hold our callsign until the server's heartbeat reaps it
- * (~60 s worst case); keep retrying "callsign-taken" during an automatic
- * reconnect long enough to outlive the ghost.
+ * A dead session can hold our callsign — and its room slot, and its share of
+ * a group's member cap — until the server's heartbeat reaps it (~60 s worst
+ * case). During an automatic reconnect, keep retrying the rejections our own
+ * ghost can cause long enough to outlive it.
  */
 export const MAX_CALLSIGN_TAKEN_RETRIES = 7;
+const GHOST_CLEARABLE_CODES = new Set(["callsign-taken", "full", "group-too-large"]);
 
 /** WS close codes that mean "do not retry": auth/room-level rejections. */
 const FATAL_CLOSE_CODES = new Set([4401, 4409, 4423, 4400]);
@@ -40,7 +42,7 @@ export function isRetryableJoinError(err: JoinErrorLike, reconnectAttempt: numbe
     return true;
   }
   const isAutoReconnect = reconnectAttempt > 0;
-  if (isAutoReconnect && err.code === "callsign-taken") {
+  if (isAutoReconnect && GHOST_CLEARABLE_CODES.has(err.code)) {
     return reconnectAttempt <= MAX_CALLSIGN_TAKEN_RETRIES;
   }
   return false;

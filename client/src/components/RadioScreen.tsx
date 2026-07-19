@@ -1,5 +1,5 @@
 import { useEffect, useState, type JSX } from "react";
-import { frequencyLabel, type PeerStatus } from "@walkietalkie/shared";
+import { frequencyLabel, type SettableStatus } from "@walkietalkie/shared";
 import { usePushToTalk } from "../hooks/usePushToTalk";
 import { useWakeLock } from "../hooks/useWakeLock";
 import { radio } from "../lib/radio";
@@ -8,7 +8,7 @@ import { Roster } from "./Roster";
 import { SettingsPanel } from "./SettingsPanel";
 import { TransmissionLog } from "./TransmissionLog";
 
-const STATUS_CYCLE: PeerStatus[] = ["available", "busy", "monitoring"];
+const STATUS_CYCLE: SettableStatus[] = ["available", "busy", "monitoring"];
 const DENY_VISIBLE_MS = 1500;
 
 export function RadioScreen(): JSX.Element {
@@ -22,6 +22,7 @@ export function RadioScreen(): JSX.Element {
   const requesting = useRadioStore((s) => s.requesting);
   const lastDeny = useRadioStore((s) => s.lastDeny);
   const clearDeny = useRadioStore((s) => s.clearDeny);
+  const groupContext = useRadioStore((s) => s.groupContext);
   const ptt = usePushToTalk();
   const [showSettings, setShowSettings] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -45,12 +46,16 @@ export function RadioScreen(): JSX.Element {
 
   const cycleStatus = (): void => {
     const next =
-      STATUS_CYCLE[(STATUS_CYCLE.indexOf(selfStatus) + 1) % STATUS_CYCLE.length] ?? "available";
+      STATUS_CYCLE[(STATUS_CYCLE.indexOf(selfStatus as SettableStatus) + 1) % STATUS_CYCLE.length] ??
+      "available";
     radio.setStatus(next);
   };
 
   const copyInvite = (): void => {
-    const url = `${location.origin}/?ch=${String(join.channel)}&code=${String(join.code)}`;
+    const url =
+      groupContext !== null
+        ? `${location.origin}/?group=${encodeURIComponent(groupContext.groupId)}`
+        : `${location.origin}/?ch=${String(join.channel)}&code=${String(join.code)}`;
     const shareData = { title: "walkietalkie channel", url };
     if (typeof navigator.share === "function" && navigator.canShare?.(shareData) === true) {
       void navigator.share(shareData).catch(() => undefined);
@@ -67,31 +72,39 @@ export function RadioScreen(): JSX.Element {
       <header>
         <div>
           <strong className="freq" data-testid="channel-label">
-            CH {join.channel} · {frequencyLabel(join.channel)}
+            {groupContext?.announce === true
+              ? `${groupContext.groupName} · ALL CHANNELS`
+              : `CH ${join.channel} · ${frequencyLabel(join.channel)}`}
           </strong>
           <span className="code-label">
-            {join.code === 0 ? "open" : `code ${join.code}`} · {join.callsign}
+            {groupContext !== null
+              ? `${groupContext.announce ? "PA" : (groupContext.channelLabel ?? groupContext.groupName)} · ${join.callsign}`
+              : `${join.code === 0 ? "open" : `code ${join.code}`} · ${join.callsign}`}
           </span>
         </div>
         <div className="header-actions">
-          <button
-            type="button"
-            className="mini"
-            data-testid="status-button"
-            onClick={cycleStatus}
-            title="Cycle status: available / busy / monitoring (listen-only)"
-          >
-            {selfStatus}
-          </button>
-          <button
-            type="button"
-            className="mini"
-            aria-pressed={deafened}
-            data-testid="deafen-button"
-            onClick={() => radio.setDeafened(!deafened)}
-          >
-            {deafened ? "Undeafen" : "Deafen"}
-          </button>
+          {groupContext?.announce !== true && (
+            <>
+              <button
+                type="button"
+                className="mini"
+                data-testid="status-button"
+                onClick={cycleStatus}
+                title="Cycle status: available / busy / monitoring (listen-only)"
+              >
+                {selfStatus}
+              </button>
+              <button
+                type="button"
+                className="mini"
+                aria-pressed={deafened}
+                data-testid="deafen-button"
+                onClick={() => radio.setDeafened(!deafened)}
+              >
+                {deafened ? "Undeafen" : "Deafen"}
+              </button>
+            </>
+          )}
           <button type="button" className="mini" data-testid="invite-button" onClick={copyInvite}>
             {copied ? "Copied" : "Invite"}
           </button>
@@ -123,11 +136,13 @@ export function RadioScreen(): JSX.Element {
       {showSettings && <SettingsPanel />}
 
       <Roster />
-      <TransmissionLog />
+      {groupContext?.announce !== true && <TransmissionLog />}
 
       {denyVisible && (
         <p className="deny" role="status" data-testid="floor-denied">
-          Channel busy{lastDeny?.reason === "cooldown" ? " — cooldown" : ""}
+          {lastDeny?.busy !== undefined && lastDeny.busy.length > 0
+            ? `Busy: ${lastDeny.busy.join(", ")}`
+            : `Channel busy${lastDeny?.reason === "cooldown" ? " — cooldown" : ""}`}
         </p>
       )}
 
@@ -146,10 +161,14 @@ export function RadioScreen(): JSX.Element {
         {selfStatus === "monitoring"
           ? "MONITORING"
           : transmitting
-            ? "TRANSMITTING"
+            ? groupContext?.announce === true
+              ? "ANNOUNCING"
+              : "TRANSMITTING"
             : requesting
               ? "…"
-              : "HOLD TO TALK"}
+              : groupContext?.announce === true
+                ? "HOLD TO ANNOUNCE"
+                : "HOLD TO TALK"}
       </button>
       <p className="hint">Hold the button or the PTT key.</p>
     </div>

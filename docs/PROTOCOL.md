@@ -36,8 +36,10 @@ authoritatively and rejects with the codes above even for a valid token.
 |---|---|---|
 | `request-floor` | — | ask to transmit |
 | `release-floor` | — | done transmitting; no-op if not holder |
+| `request-group-floor` | — | announce sessions only: atomic floor across every group channel |
+| `release-group-floor` | — | announce sessions only |
 | `signal` | `{ to: peerId, data: object }` | opaque SDP/ICE relay; server checks `to` is in the room and never inspects `data` |
-| `set-status` | `{ status: "available" \| "busy" \| "monitoring" }` | presence, display + client-side audio policy |
+| `set-status` | `{ status: "available" \| "busy" \| "monitoring" }` | presence; `announcing` is server-assigned to PA sessions and cannot be claimed |
 | `ping` | — | keepalive; server answers `pong` |
 
 ## Server → client
@@ -52,8 +54,16 @@ authoritatively and rejects with the codes above even for a valid token.
 | `floor-released` | `{ seq, reason: "released" \| "timeout" \| "disconnected" }` | receivers play roger beep on `released`/`timeout` |
 | `signal` | `{ from: peerId, data: object }` | relayed SDP/ICE |
 | `status-changed` | `{ peerId, status }` | |
+| `group-floor-granted` | `{ maxHoldMs }` | to the announcer: every channel granted |
+| `group-floor-denied` | `{ busy: string[] }` | to the announcer: labels of busy channels; nothing was taken |
+| `group-floor-released` | `{ reason }` | to the announcer; members see per-room `floor-released` |
 | `pong` | — | |
 | `error` | `{ code, message }` | non-fatal errors; fatal ones close the socket with a WS close code |
+
+Announce sockets never receive per-room `floor-granted/denied/released` or
+`status-changed` frames — their floor state is the `group-floor-*` trio.
+Member-mode messages on an announce socket (and vice versa) earn an `error`
+frame, not a close.
 
 `Peer` = `{ peerId, callsign, status, joinSeq }`.
 `FloorState` = `{ holder: peerId \| null, since?: number }`.
@@ -101,3 +111,25 @@ Errors: `400` validation · `409` callsign taken · `423` channel full ·
 
 `GET /api/ice` → `{ iceServers: RTCIceServer[] }` (STUN always; TURN only if
 configured via env). `GET /healthz` → `{ ok: true, rooms, peers }`.
+
+## Groups API
+
+- `POST /api/groups` `{ name, channels: [{channel, code, label}] × 2–6 }` →
+  `{ groupId, adminKey, name }`. Rate-limited (5/min/IP). The `adminKey` is
+  shown once — it IS the admin role.
+- `GET /api/groups/:id` → `{ groupId, name, channels: [{…, occupancy}] }`.
+  Knowing the unguessable id is the read capability.
+- `POST /api/join` accepts optional `groupId`: validates the (channel, code)
+  belongs to the group and scopes the token to the namespaced room.
+  Errors add `404 group-not-found` · `400 channel-not-in-group`.
+- `POST /api/groups/:id/announce` `{ adminKey, callsign }` → `{ token }`
+  admitting one socket to every group channel (mode `announce`). Errors:
+  `403 bad-admin-key` · `423 group-too-large` (over `MAX_GROUP_MEMBERS`) ·
+  `409/423` on callsign/occupancy conflicts.
+
+Tokens carry `{ rooms: string[], callsign, mode: "member" | "announce",
+group? }` — members always exactly one room; `group` is set for announce
+sessions and for members of group rooms (it selects the shared joinSeq
+counter). Group members draw `joinSeq` from a
+group-wide counter (politeness stays a total order when an announcer spans
+rooms).

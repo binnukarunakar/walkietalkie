@@ -57,7 +57,9 @@ describe("isRetryableJoinError", () => {
     ).toBe(false);
   });
 
-  it("never retries a full channel during reconnect", () => {
-    expect(isRetryableJoinError({ status: 423, code: "full" }, 2)).toBe(false);
+  it("retries a full channel during reconnect — our own ghost may hold the slot", () => {
+    expect(isRetryableJoinError({ status: 423, code: "full" }, 2)).toBe(true);
+    expect(isRetryableJoinError({ status: 423, code: "group-too-large" }, 2)).toBe(true);
+    expect(isRetryableJoinError({ status: 423, code: "group-too-large" }, 99)).toBe(false);
   });
 });

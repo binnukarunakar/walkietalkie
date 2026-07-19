@@ -6,8 +6,9 @@ import {
   type ClientMessage,
   type ServerMessage,
 } from "@walkietalkie/shared";
+import { AnnounceSession, type AnnounceDeps } from "./announce.js";
 import type { RoomManager, Room, PeerHandle } from "./rooms.js";
-import type { TokenService } from "./tokens.js";
+import type { SessionClaims, TokenService } from "./tokens.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const MAX_PAYLOAD_BYTES = 32 * 1024;
@@ -64,6 +65,10 @@ interface LiveSocket extends WebSocket {
 export interface WsDeps {
   tokens: TokenService;
   roomManager: RoomManager;
+  /** Wires announce sessions to the group registry (seq + labels). */
+  announceDeps: (groupId: string | undefined) => AnnounceDeps;
+  /** joinSeq for MEMBERS of group rooms (shared per-group counter). */
+  memberJoinSeq: (groupId: string | undefined) => number | undefined;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
 }
 
@@ -112,16 +117,26 @@ async function admit(ws: LiveSocket, req: IncomingMessage, deps: WsDeps): Promis
     ws.close(WS_CLOSE.invalidToken, "invalid or expired token");
     return;
   }
+  if (claims.mode === "announce") {
+    admitAnnounce(ws, claims, deps);
+  } else {
+    admitMember(ws, claims, deps);
+  }
+}
 
+function admitMember(ws: LiveSocket, claims: SessionClaims, deps: WsDeps): void {
+  const roomKey = claims.rooms[0];
+  if (roomKey === undefined) {
+    ws.close(WS_CLOSE.invalidToken, "no room in token");
+    return;
+  }
+  const joinSeq = deps.memberJoinSeq(claims.group);
   const result = deps.roomManager.join(
-    claims.room,
+    roomKey,
     claims.callsign,
-    (msg) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(msg));
-      }
-    },
+    (msg) => sendJson(ws, msg),
     (code, reason) => ws.close(code, reason),
+    joinSeq === undefined ? undefined : { joinSeq },
   );
   if (!result.ok) {
     ws.close(
@@ -132,7 +147,7 @@ async function admit(ws: LiveSocket, req: IncomingMessage, deps: WsDeps): Promis
   }
 
   const { room, handle } = result;
-  deps.log.info(`peer ${handle.peer.callsign} joined ${room.key} (${room.size} in room)`);
+  deps.log.info(`peer ${handle.peer.callsign} joined ${room.key} (${String(room.size)} in room)`);
 
   handle.send({
     t: "welcome",
@@ -143,6 +158,40 @@ async function admit(ws: LiveSocket, req: IncomingMessage, deps: WsDeps): Promis
     seq: room.floor.currentSeq,
   });
 
+  wireSocket(ws, (msg) => dispatchMember(msg, room, handle), () => {
+    deps.roomManager.leave(room.key, handle.peer.peerId);
+    deps.log.info(`peer ${handle.peer.callsign} left ${room.key}`);
+  });
+}
+
+function admitAnnounce(ws: LiveSocket, claims: SessionClaims, deps: WsDeps): void {
+  const admission = AnnounceSession.admit(
+    claims.rooms,
+    claims.callsign,
+    deps.announceDeps(claims.group),
+    (msg) => sendJson(ws, msg),
+    (code, reason) => ws.close(code, reason),
+  );
+  if (!admission.ok) {
+    ws.close(
+      admission.code === "full" ? WS_CLOSE.channelFull : WS_CLOSE.callsignTaken,
+      admission.code,
+    );
+    return;
+  }
+
+  const { session } = admission;
+  deps.log.info(`announce session ${claims.callsign} across ${String(claims.rooms.length)} rooms`);
+  sendJson(ws, session.welcome());
+
+  wireSocket(ws, (msg) => dispatchAnnounce(msg, session, ws), () => {
+    session.dispose();
+    deps.log.info(`announce session ${claims.callsign} ended`);
+  });
+}
+
+/** Shared per-socket wiring: liveness flag, flood bucket, frame parsing. */
+function wireSocket(ws: LiveSocket, onMessage: (msg: ClientMessage) => void, onClose: () => void): void {
   ws.isAlive = true;
   ws.on("pong", () => {
     ws.isAlive = true;
@@ -157,12 +206,12 @@ async function admit(ws: LiveSocket, req: IncomingMessage, deps: WsDeps): Promis
     const result = parseClientMessage(raw.toString());
     switch (result.kind) {
       case "ok":
-        dispatch(result.msg, room, handle);
+        onMessage(result.msg);
         break;
       case "unknown-type":
         // Recoverable per PROTOCOL.md: a newer client speaking a message type
         // we don't know gets an error frame, not a teardown.
-        handle.send({
+        sendJson(ws, {
           t: "error",
           v: PROTOCOL_VERSION,
           code: "unknown-type",
@@ -175,16 +224,13 @@ async function admit(ws: LiveSocket, req: IncomingMessage, deps: WsDeps): Promis
     }
   });
 
-  ws.on("close", () => {
-    deps.roomManager.leave(room.key, handle.peer.peerId);
-    deps.log.info(`peer ${handle.peer.callsign} left ${room.key}`);
-  });
+  ws.on("close", onClose);
 
   // The socket may have died while token verification was in flight, i.e.
   // before the close listener above existed. Reap the ghost peer; a second
   // leave for the same peer is a no-op, so racing the listener is safe.
   if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
-    deps.roomManager.leave(room.key, handle.peer.peerId);
+    onClose();
   }
 }
 
@@ -223,7 +269,7 @@ function parseClientMessage(raw: string): ParseResult {
   return { kind: "malformed" };
 }
 
-function dispatch(msg: ClientMessage, room: Room, handle: PeerHandle): void {
+function dispatchMember(msg: ClientMessage, room: Room, handle: PeerHandle): void {
   const peerId = handle.peer.peerId;
   switch (msg.t) {
     case "request-floor": {
@@ -284,6 +330,57 @@ function dispatch(msg: ClientMessage, room: Room, handle: PeerHandle): void {
       handle.send({ t: "pong", v: PROTOCOL_VERSION });
       break;
     }
+    case "request-group-floor":
+    case "release-group-floor": {
+      handle.send({
+        t: "error",
+        v: PROTOCOL_VERSION,
+        code: "not-announce-session",
+        message: "group floor is only available to announce sessions",
+      });
+      break;
+    }
+  }
+}
+
+function dispatchAnnounce(msg: ClientMessage, session: AnnounceSession, ws: LiveSocket): void {
+  switch (msg.t) {
+    case "request-group-floor":
+      session.requestFloor();
+      break;
+    case "release-group-floor":
+      session.releaseFloor();
+      break;
+    case "signal": {
+      if (!session.relaySignal(msg.to, msg.data)) {
+        sendJson(ws, {
+          t: "error",
+          v: PROTOCOL_VERSION,
+          code: "unknown-peer",
+          message: `no peer ${msg.to} in any group room`,
+        });
+      }
+      break;
+    }
+    case "ping":
+      sendJson(ws, { t: "pong", v: PROTOCOL_VERSION });
+      break;
+    case "request-floor":
+    case "release-floor":
+    case "set-status":
+      sendJson(ws, {
+        t: "error",
+        v: PROTOCOL_VERSION,
+        code: "announce-session",
+        message: "announce sessions use the group floor",
+      });
+      break;
+  }
+}
+
+function sendJson(ws: WebSocket, msg: ServerMessage): void {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(msg));
   }
 }
 
