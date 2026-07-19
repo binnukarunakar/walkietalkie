@@ -85,7 +85,8 @@ export function CreateGroupScreen({ onCreated, onBack }: CreateGroupScreenProps)
       {rows.map((row, i) => (
         <div className="group-row" key={i}>
           <select
-            aria-label={`Channel ${String(i + 1)}`}
+            className="freq-select"
+            aria-label={`Channel ${String(i + 1)} frequency`}
             value={row.channel}
             onChange={(e) => updateRow(i, { channel: Number(e.target.value) })}
           >
@@ -99,7 +100,7 @@ export function CreateGroupScreen({ onCreated, onBack }: CreateGroupScreenProps)
           </select>
           <input
             type="text"
-            aria-label={`Label for channel ${String(i + 1)}`}
+            aria-label={`Channel ${String(i + 1)} crew label`}
             data-testid={`label-input-${String(i)}`}
             maxLength={16}
             placeholder={i === 0 ? "e.g. musicians" : "e.g. led-tech"}
@@ -122,7 +123,7 @@ export function CreateGroupScreen({ onCreated, onBack }: CreateGroupScreenProps)
       {rows.length < GROUP_CHANNELS_MAX && (
         <button
           type="button"
-          className="mini"
+          className="mini ghost-dashed"
           data-testid="add-channel"
           onClick={() =>
             setRows([...rows, { channel: Math.min(rows.length + 1, CHANNEL_MAX), code: 0, label: "" }])
@@ -140,13 +141,14 @@ export function CreateGroupScreen({ onCreated, onBack }: CreateGroupScreenProps)
 
       <button
         type="button"
+        className="btn-primary"
         data-testid="create-group-button"
         disabled={!valid || submitting}
         onClick={() => void create()}
       >
         {submitting ? "Creating…" : "Create group"}
       </button>
-      <button type="button" className="mini" onClick={onBack}>
+      <button type="button" className="btn-text" onClick={onBack}>
         Back
       </button>
     </div>
